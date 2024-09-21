@@ -1,18 +1,27 @@
 package se.vidstige.jadb.test.unit;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+
+import se.vidstige.jadb.ConnectionToRemoteDeviceException;
 import se.vidstige.jadb.JadbConnection;
 import se.vidstige.jadb.JadbDevice;
 import se.vidstige.jadb.JadbException;
 import se.vidstige.jadb.RemoteFile;
+import se.vidstige.jadb.Stream;
 import se.vidstige.jadb.test.fakes.FakeAdbServer;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
 import java.text.ParseException;
@@ -47,6 +56,34 @@ public class MockedTestCases {
         server.add("serial-123");
         List<JadbDevice> devices = connection.getDevices();
         Assert.assertEquals("serial-123", devices.get(0).getSerial());
+    }
+
+    @Test
+    public void testConnectionToTcpDevice() throws IOException, JadbException, ConnectionToRemoteDeviceException {
+        connection.connectToTcpDevice(new InetSocketAddress("10.90.81.12", 5555));
+        JadbDevice any = connection.getAnyDevice();
+//        ByteArrayOutputStream bout = new ByteArrayOutputStream();
+//        any.executeShell(bout, "ls /");
+//        any.executeShell(bout, "ls", "-la", "/");
+//        System.out.write(bout.toByteArray());
+
+        try  {
+            InputStream stdout = any.executeShell("ls");
+            System.out.write(stdout.readAllBytes());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        } catch (JadbException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    public void testDisConnectionToTcpDevice() throws IOException, JadbException, ConnectionToRemoteDeviceException {
+        connection.disconnectFromTcpDevice(new InetSocketAddress("127.0.0.1", 10001));
+        List<JadbDevice> devices = connection.getDevices();
+
+        assertNotNull(devices);
+        assertFalse(devices.isEmpty());
     }
 
     @Test

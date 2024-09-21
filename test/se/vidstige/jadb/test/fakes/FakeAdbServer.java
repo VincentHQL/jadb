@@ -2,17 +2,28 @@ package se.vidstige.jadb.test.fakes;
 
 import se.vidstige.jadb.JadbException;
 import se.vidstige.jadb.RemoteFile;
+import se.vidstige.jadb.server.AdbBase64;
+import se.vidstige.jadb.server.AdbConnection;
+import se.vidstige.jadb.server.AdbCrypto;
 import se.vidstige.jadb.server.AdbDeviceResponder;
 import se.vidstige.jadb.server.AdbResponder;
 import se.vidstige.jadb.server.AdbServer;
+import se.vidstige.jadb.server.AdbStream;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInput;
 import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.ProtocolException;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.NoSuchAlgorithmException;
+import java.security.spec.InvalidKeySpecException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 
@@ -22,6 +33,9 @@ import java.util.List;
 public class FakeAdbServer implements AdbResponder {
     private final AdbServer server;
     private final List<DeviceResponder> devices = new ArrayList<>();
+
+    private AdbCrypto crypto;
+
 
     public FakeAdbServer(int port) {
         server = new AdbServer(this, port);
@@ -42,17 +56,58 @@ public class FakeAdbServer implements AdbResponder {
         System.out.println("command: " + command);
     }
 
+    public static AdbBase64 getBase64Impl() {
+        return new AdbBase64() {
+            @Override
+            public String encodeToString(byte[] arg0) {
+                return Base64.getEncoder().encodeToString(arg0);
+            }
+        };
+    }
+
+    private AdbCrypto setupCrypto() throws NoSuchAlgorithmException, IOException {
+
+        AdbCrypto c = null;
+        try {
+            File privKey = new File("priv.key");
+
+            FileInputStream privIn = new FileInputStream("priv.key");
+            FileInputStream pubIn = new FileInputStream("pub.key");
+            c = AdbCrypto.loadAdbKeyPair(getBase64Impl(), privIn, pubIn);
+        } catch (IOException | InvalidKeySpecException | NoSuchAlgorithmException | NullPointerException e) {
+            // Failed to read from file
+            c = null;
+        }
+
+
+        if (c == null) {
+            // We couldn't load a key, so let's generate a new one
+            c = AdbCrypto.generateAdbKeyPair(getBase64Impl());
+
+            // Save it
+            FileOutputStream privOut = new FileOutputStream("priv.key");
+            FileOutputStream pubOut = new FileOutputStream("priv.key");
+
+            c.saveAdbKeyPair(privOut, pubOut);
+            //Generated new keypair
+        } else {
+            //Loaded existing keypair
+        }
+
+        return c;
+    }
+
     @Override
     public int getVersion() {
         return 31;
     }
 
     public void add(String serial) {
-        devices.add(new DeviceResponder(serial, "device"));
+        devices.add(new DeviceResponder(serial, "device", null));
     }
 
     public void add(String serial, String type) {
-        devices.add(new DeviceResponder(serial, type));
+        devices.add(new DeviceResponder(serial, type, null));
     }
 
     public void verifyExpectations() {
@@ -100,6 +155,35 @@ public class FakeAdbServer implements AdbResponder {
         return new ArrayList<AdbDeviceResponder>(devices);
     }
 
+    @Override
+    public boolean isDeviceConnected(String serial) {
+        return findBySerial(serial) != null;
+    }
+
+    @Override
+    public boolean onDeviceConnect(String serial) {
+        Socket sock = null;
+        boolean result = false;
+        String[] deviceAddr = serial.split(":");
+        if (deviceAddr.length != 2) {
+            return result;
+        }
+        try {
+            sock = new Socket(deviceAddr[0], Integer.parseInt(deviceAddr[1]));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        try {
+            AdbConnection adb = AdbConnection.create(sock, crypto);
+            adb.connect();
+            devices.add(new DeviceResponder(serial, "device", adb));
+            result = true;
+        } catch (IOException | InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        return result;
+    }
+
     private static class DeviceResponder implements AdbDeviceResponder {
         private final String serial;
         private final String type;
@@ -108,9 +192,12 @@ public class FakeAdbServer implements AdbResponder {
         private List<ListExpectation> listExpectations = new ArrayList<>();
         private List<Integer> tcpipExpectations = new ArrayList<>();
 
-        private DeviceResponder(String serial, String type) {
+        private AdbConnection adbConnection;
+
+        private DeviceResponder(String serial, String type, AdbConnection adb) {
             this.serial = serial;
             this.type = type;
+            this.adbConnection = adb;
         }
 
         @Override
@@ -151,14 +238,30 @@ public class FakeAdbServer implements AdbResponder {
 
         @Override
         public void shell(String command, DataOutputStream stdout, DataInput stdin) throws IOException {
-            for (ShellExpectation se : shellExpectations) {
-                if (se.matches(command)) {
-                    shellExpectations.remove(se);
-                    se.writeOutputTo(stdout);
-                    return;
+            try {
+                AdbStream stream = adbConnection.open("shell:");
+                stream.write(command);
+                boolean done = false;
+                while (!done) {
+                    byte[] responseBytes = stream.read();
+                    String response = new String(responseBytes, "US-ASCII");
+                    if (response.endsWith("$ ") || response.endsWith("# ")) {
+                        done = true;
+                        stdout.writeBytes(response);
+                    }
                 }
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
             }
-            throw new ProtocolException("Unexpected shell to device " + serial + ": " + command);
+
+//            for (ShellExpectation se : shellExpectations) {
+//                if (se.matches(command)) {
+//                    shellExpectations.remove(se);
+//                    se.writeOutputTo(stdout);
+//                    return;
+//                }
+//            }
+//            throw new ProtocolException("Unexpected shell to device " + serial + ": " + command);
         }
 
         @Override

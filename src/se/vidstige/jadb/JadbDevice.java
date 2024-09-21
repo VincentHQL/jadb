@@ -81,6 +81,12 @@ public class JadbDevice {
         }
     }
 
+    public void forward(String local, String remote) throws IOException, JadbException {
+        try (Transport transport = getTransport()) {
+            send(transport, serial == null ? "host:get-state" : "host-serial:" + serial + ":get-state");
+        }
+    }
+
     /** <p>Execute a shell command.</p>
      *
      * <p>For Lollipop and later see: {@link #execute(String, String...)}</p>

@@ -11,4 +11,8 @@ public interface AdbResponder {
     int getVersion();
 
     List<AdbDeviceResponder> getDevices();
+
+    boolean isDeviceConnected(String serial);
+
+    boolean onDeviceConnect(String serial);
 }

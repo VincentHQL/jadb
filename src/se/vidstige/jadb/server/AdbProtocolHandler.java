@@ -72,6 +72,8 @@ class AdbProtocolHandler implements Runnable {
                 hostSerial(output, command);
             } else if (command.startsWith("tcpip:")) {
                 handleTcpip(output, command);
+            } else if (command.startsWith("host:connect:")) {
+                handleConnectDevice(output, command);
             } else {
                 throw new ProtocolException("Unknown command: " + command);
             }
@@ -81,6 +83,20 @@ class AdbProtocolHandler implements Runnable {
         }
         output.flush();
         return true;
+    }
+
+    private void handleConnectDevice(DataOutputStream output, String command) throws IOException {
+        output.writeBytes("OKAY");
+        String serial = command.substring("host:connect:".length());
+        if (responder.isDeviceConnected(serial)) {
+            send(output, "already connected to " + serial);
+            return;
+        }
+        if (responder.onDeviceConnect(serial)) {
+            send(output, "connected to " + serial);
+        } else {
+            send(output, "failed to connect to " + serial);
+        }
     }
 
     private void handleTcpip(DataOutputStream output, String command) throws IOException {
